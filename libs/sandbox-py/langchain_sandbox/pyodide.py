@@ -238,9 +238,8 @@ class BasePyodideSandbox:
             cmd.extend(["-s"])
 
         if session_bytes:
-            # Convert bytes to list of integers and then to JSON string
-            bytes_array = list(session_bytes)
-            cmd.extend(["-b", json.dumps(bytes_array)])
+            # Prefer piping session bytes via stdin to avoid CLI arg length limits
+            cmd.append("--session-stdin")
 
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
@@ -299,12 +298,13 @@ class PyodideSandbox(BasePyodideSandbox):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE,
         )
 
         try:
             # Wait for process with a timeout
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                process.communicate(input=session_bytes if session_bytes else None),
                 timeout=timeout_seconds,
             )
             stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -401,6 +401,7 @@ class SyncPyodideSandbox(BasePyodideSandbox):
                 text=False,  # Keep as bytes for proper decoding
                 timeout=timeout_seconds,
                 check=False,  # Don't raise on non-zero exit
+                input=session_bytes if session_bytes else None,
             )
 
             stdout_bytes = process.stdout

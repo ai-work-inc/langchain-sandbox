@@ -107,6 +107,29 @@ async def test_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     assert "timed out" in result.stderr.lower()
 
 
+async def test_large_session_bytes_async(pyodide_package: None) -> None:
+    """Create a large session and ensure piping via stdin handles it."""
+    sandbox = get_default_sandbox(stateful=True)
+
+    # Create a large variable (~2 MiB string when encoded)
+    code_create = "big = 'x' * (2 * 1024 * 1024); print(len(big))"
+    first = await sandbox.execute(code_create)
+    assert first.status == "success", f"Encountered error: {first.stderr}"
+    assert first.stdout == str(2 * 1024 * 1024)
+    assert first.session_bytes is not None
+    # Previously this size would overflow argv limits; now it should pipe fine
+    assert len(first.session_bytes) > 500_000
+
+    # Reuse the large session
+    second = await sandbox.execute(
+        "print(len(big))",
+        session_bytes=first.session_bytes,
+        session_metadata=first.session_metadata,
+    )
+    assert second.status == "success", f"Encountered error: {second.stderr}"
+    assert second.stdout == str(2 * 1024 * 1024)
+
+
 def test_sync_stdout_sessionless(pyodide_package: None) -> None:
     """Test synchronous execution without a session ID."""
     sandbox = get_default_sync_sandbox()
@@ -163,6 +186,28 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     result = sandbox.execute("while True: pass", timeout_seconds=0.5)
     assert result.status == "error"
     assert "timed out" in result.stderr.lower()
+
+
+def test_large_session_bytes_sync(pyodide_package: None) -> None:
+    """Create a large session and ensure piping via stdin handles it (sync)."""
+    sandbox = get_default_sync_sandbox(stateful=True)
+
+    # Create a large variable (~2 MiB string when encoded)
+    code_create = "big = 'x' * (2 * 1024 * 1024); print(len(big))"
+    first = sandbox.execute(code_create)
+    assert first.status == "success", f"Encountered error: {first.stderr}"
+    assert first.stdout == str(2 * 1024 * 1024)
+    assert first.session_bytes is not None
+    assert len(first.session_bytes) > 500_000
+
+    # Reuse the large session
+    second = sandbox.execute(
+        "print(len(big))",
+        session_bytes=first.session_bytes,
+        session_metadata=first.session_metadata,
+    )
+    assert second.status == "success", f"Encountered error: {second.stderr}"
+    assert second.stdout == str(2 * 1024 * 1024)
 
 
 def test_pyodide_sandbox_tool() -> None:

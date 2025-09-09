@@ -195,7 +195,7 @@ async function runPython(
   pythonCode: string,
   options: {
     stateful?: boolean;
-    sessionBytes?: string;
+    sessionBytes?: string | Uint8Array;
     sessionMetadata?: string;
   }
 ): Promise<PyodideResult> {
@@ -269,7 +269,11 @@ async function runPython(
     }
 
     if (options.sessionBytes) {
-      sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
+      if (typeof options.sessionBytes === "string") {
+        sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
+      } else {
+        sessionData = options.sessionBytes;
+      }
       // Run session preamble
       await prepare_env.load_session_bytes(sessionData);
     }
@@ -318,7 +322,7 @@ async function runPython(
 
 async function main(): Promise<void> {
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session-bytes", "session-metadata"],
+    string: ["code", "file", "session-bytes", "session-metadata", "session-file"],
     alias: {
       c: "code",
       f: "file",
@@ -328,7 +332,7 @@ async function main(): Promise<void> {
       b: "session-bytes",
       m: "session-metadata",
     },
-    boolean: ["help", "version", "stateful"],
+    boolean: ["help", "version", "stateful", "session-stdin"],
     default: { help: false, version: false, stateful: false },
   });
 
@@ -342,6 +346,8 @@ OPTIONS:
   -f, --file <path>            Path to Python file to execute
   -s, --stateful <bool>        Use a stateful session
   -b, --session-bytes <bytes>  Session bytes
+      --session-stdin          Read session bytes from stdin (raw binary)
+      --session-file <path>    Read session bytes from file (raw binary)
   -m, --session-metadata       Session metadata
   -h, --help                   Display help
   -V, --version                Display version
@@ -388,9 +394,29 @@ OPTIONS:
     pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
   }
 
+  let sessionBytesForRun: string | Uint8Array | undefined = options.sessionBytes;
+  if (!sessionBytesForRun) {
+    if (flags["session-stdin"]) {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of Deno.stdin.readable) {
+        chunks.push(chunk as Uint8Array);
+      }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const c of chunks) {
+        out.set(c, offset);
+        offset += c.length;
+      }
+      sessionBytesForRun = out;
+    } else if (flags["session-file"]) {
+      sessionBytesForRun = await Deno.readFile(String(flags["session-file"]));
+    }
+  }
+
   const result = await runPython(pythonCode, {
     stateful: options.stateful,
-    sessionBytes: options.sessionBytes,
+    sessionBytes: sessionBytesForRun,
     sessionMetadata: options.sessionMetadata,
   });
 
