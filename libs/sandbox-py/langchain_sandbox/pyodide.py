@@ -6,6 +6,7 @@ import json
 import logging
 import subprocess
 import time
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from langchain_core.callbacks import (
@@ -197,6 +198,22 @@ class BasePyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
+    def _get_deno_cwd(self) -> str | None:
+        """Return the working directory for the Deno subprocess if using a local script.
+
+        When running against a local TypeScript file (e.g. in tests), ensure the Deno
+        process runs with its CWD set to the directory of that file so that relative
+        permission paths like "node_modules" resolve correctly.
+        """
+        pkg = PKG_NAME
+        # If using a remote JSR package, no need to set cwd
+        if isinstance(pkg, str) and pkg.startswith(("jsr:", "http://", "https://")):
+            return None
+        script_path = Path(pkg)
+        if script_path.exists():
+            return str(script_path.resolve().parent)
+        return None
+
     def _build_command(
         self,
         code: str,
@@ -231,20 +248,31 @@ class BasePyodideSandbox:
         # Add the path to the JavaScript wrapper script
         cmd.append(PKG_NAME)
 
-        # Add script path and code
-        cmd.extend(["-c", code])
+        # Add script path; code is provided via combined stdin payload
 
         if self.stateful:
             cmd.extend(["-s"])
 
-        if session_bytes:
-            # Prefer piping session bytes via stdin to avoid CLI arg length limits
-            cmd.append("--session-stdin")
-
-        if session_metadata:
-            cmd.extend(["-m", json.dumps(session_metadata)])
+        # Use combined framed stdin for code, metadata, and optional session bytes
+        cmd.append("--stdin-combined")
 
         return cmd
+
+    def _build_combined_stdin_payload(
+        self,
+        code: str,
+        *,
+        session_metadata: dict | None,
+        session_bytes: bytes | None,
+    ) -> bytes:
+        """Create framed stdin payload: [code_len(4)][meta_len(4)][code][meta][session]."""
+        code_bytes = code.encode("utf-8")
+        metadata_str = json.dumps(session_metadata) if session_metadata else ""
+        metadata_bytes = metadata_str.encode("utf-8")
+        header = len(code_bytes).to_bytes(4, "big") + len(metadata_bytes).to_bytes(
+            4, "big"
+        )
+        return header + code_bytes + metadata_bytes + (session_bytes or b"")
 
 
 class PyodideSandbox(BasePyodideSandbox):
@@ -299,12 +327,19 @@ class PyodideSandbox(BasePyodideSandbox):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.PIPE,
+            cwd=self._get_deno_cwd(),
         )
 
         try:
             # Wait for process with a timeout
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(input=session_bytes if session_bytes else None),
+                process.communicate(
+                    input=self._build_combined_stdin_payload(
+                        code,
+                        session_metadata=session_metadata,
+                        session_bytes=session_bytes,
+                    )
+                ),
                 timeout=timeout_seconds,
             )
             stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -401,7 +436,12 @@ class SyncPyodideSandbox(BasePyodideSandbox):
                 text=False,  # Keep as bytes for proper decoding
                 timeout=timeout_seconds,
                 check=False,  # Don't raise on non-zero exit
-                input=session_bytes if session_bytes else None,
+                input=self._build_combined_stdin_payload(
+                    code,
+                    session_metadata=session_metadata,
+                    session_bytes=session_bytes,
+                ),
+                cwd=self._get_deno_cwd(),
             )
 
             stdout_bytes = process.stdout

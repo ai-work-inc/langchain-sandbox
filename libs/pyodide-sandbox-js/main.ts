@@ -322,17 +322,16 @@ async function runPython(
 
 async function main(): Promise<void> {
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session-bytes", "session-metadata", "session-file"],
+    string: ["code", "file", "session-metadata"],
     alias: {
       c: "code",
       f: "file",
       h: "help",
       V: "version",
       s: "stateful",
-      b: "session-bytes",
       m: "session-metadata",
     },
-    boolean: ["help", "version", "stateful", "session-stdin"],
+    boolean: ["help", "version", "stateful", "session-stdin", "stdin-combined"],
     default: { help: false, version: false, stateful: false },
   });
 
@@ -345,9 +344,8 @@ OPTIONS:
   -c, --code <code>            Python code to execute
   -f, --file <path>            Path to Python file to execute
   -s, --stateful <bool>        Use a stateful session
-  -b, --session-bytes <bytes>  Session bytes
       --session-stdin          Read session bytes from stdin (raw binary)
-      --session-file <path>    Read session bytes from file (raw binary)
+      --stdin-combined         Read framed code+metadata+session from stdin
   -m, --session-metadata       Session metadata
   -h, --help                   Display help
   -V, --version                Display version
@@ -364,38 +362,78 @@ OPTIONS:
     code: flags.code,
     file: flags.file,
     stateful: flags.stateful,
-    sessionBytes: flags["session-bytes"],
     sessionMetadata: flags["session-metadata"],
   };
 
-  if (!options.code && !options.file) {
+  if (!options.code && !options.file && !flags["stdin-combined"]) {
     console.error(
       "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information."
     );
     Deno.exit(1);
   }
 
-  // Get Python code from file or command line argument
+  // Get Python code and session bytes (combined stdin mode or file/cli)
   let pythonCode = "";
+  let sessionBytesForRun: Uint8Array | undefined = undefined;
 
-  if (options.file) {
-    try {
-      // Resolve relative or absolute file path
-      const filePath = options.file.startsWith("/")
-        ? options.file
-        : join(Deno.cwd(), options.file);
-      pythonCode = await Deno.readTextFile(filePath);
-    } catch (error: any) {
-      console.error(`Error reading file ${options.file}:`, error.message);
+  if (flags["stdin-combined"]) {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of Deno.stdin.readable) {
+      chunks.push(chunk as Uint8Array);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const input = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      input.set(c, offset);
+      offset += c.length;
+    }
+    if (input.length < 8) {
+      console.error("Error: stdin-combined payload too short (missing header)");
       Deno.exit(1);
     }
+    const view = new DataView(input.buffer, input.byteOffset, input.byteLength);
+    const codeLen = view.getUint32(0, false);
+    const metaLen = view.getUint32(4, false);
+    const start = 8;
+    const codeStart = start;
+    const codeEnd = codeStart + codeLen;
+    if (codeEnd > input.length) {
+      console.error("Error: stdin-combined payload truncated (code)");
+      Deno.exit(1);
+    }
+    const metaStart = codeEnd;
+    const metaEnd = metaStart + metaLen;
+    if (metaEnd > input.length) {
+      console.error("Error: stdin-combined payload truncated (metadata)");
+      Deno.exit(1);
+    }
+    const sessionStart = metaEnd;
+    const decoder = new TextDecoder();
+    pythonCode = decoder.decode(input.slice(codeStart, codeEnd));
+    const metadataStr =
+      metaLen > 0 ? decoder.decode(input.slice(metaStart, metaEnd)) : "";
+    if (metadataStr) {
+      options.sessionMetadata = metadataStr;
+    }
+    const sessionSlice = input.slice(sessionStart);
+    sessionBytesForRun = sessionSlice.length > 0 ? sessionSlice : undefined;
   } else {
-    // Process code from command line (replacing escaped newlines)
-    pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
-  }
-
-  let sessionBytesForRun: string | Uint8Array | undefined = options.sessionBytes;
-  if (!sessionBytesForRun) {
+    if (options.file) {
+      try {
+        // Resolve relative or absolute file path
+        const filePath = options.file.startsWith("/")
+          ? options.file
+          : join(Deno.cwd(), options.file);
+        pythonCode = await Deno.readTextFile(filePath);
+      } catch (error: any) {
+        console.error(`Error reading file ${options.file}:`, error.message);
+        Deno.exit(1);
+      }
+    } else {
+      // Process code from command line (replacing escaped newlines)
+      pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
+    }
     if (flags["session-stdin"]) {
       const chunks: Uint8Array[] = [];
       for await (const chunk of Deno.stdin.readable) {
@@ -409,8 +447,6 @@ OPTIONS:
         offset += c.length;
       }
       sessionBytesForRun = out;
-    } else if (flags["session-file"]) {
-      sessionBytesForRun = await Deno.readFile(String(flags["session-file"]));
     }
   }
 
@@ -423,9 +459,11 @@ OPTIONS:
   // Exit with error code if Python execution failed
   // Create output JSON with stdout, stderr, and result
   const outputJson = {
-    stdout: result.stdout?.join('') || null,
-    stderr: result.success ? (result.stderr?.join('') || null) : result.error || null,
-    result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
+    stdout: result.stdout?.join("") || null,
+    stderr: result.success
+      ? result.stderr?.join("") || null
+      : result.error || null,
+    result: result.success ? JSON.parse(result.jsonResult || "null") : null,
     success: result.success,
     sessionBytes: result.sessionBytes,
     sessionMetadata: result.sessionMetadata,

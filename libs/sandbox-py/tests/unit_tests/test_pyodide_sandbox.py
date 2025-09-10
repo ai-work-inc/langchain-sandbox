@@ -210,7 +210,7 @@ def test_large_session_bytes_sync(pyodide_package: None) -> None:
     assert second.stdout == str(2 * 1024 * 1024)
 
 
-def test_pyodide_sandbox_tool() -> None:
+def test_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(stateful=False, allow_net=True)
     result = tool.invoke("x = 5; print(x)")
@@ -219,14 +219,14 @@ def test_pyodide_sandbox_tool() -> None:
     assert result == "12"
 
 
-def test_pyodide_timeout() -> None:
+def test_pyodide_timeout(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
     tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
     result = tool.invoke("while True: pass")
     assert result == "Error during execution: Execution timed out after 0.1 seconds"
 
 
-async def test_async_pyodide_sandbox_tool() -> None:
+async def test_async_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(stateful=False, allow_net=True)
     result = await tool.ainvoke("x = 5; print(x)")
@@ -237,7 +237,7 @@ async def test_async_pyodide_sandbox_tool() -> None:
     assert result == "12"
 
 
-async def test_async_pyodide_timeout() -> None:
+async def test_async_pyodide_timeout(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
     tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
     result = await tool.ainvoke("while True: pass")
