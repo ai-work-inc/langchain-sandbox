@@ -1,5 +1,5 @@
 {
-  "name": "@langchain/pyodide-sandbox",
+  "name": "@ai-work-inc/pyodide-sandbox",
   "version": "0.0.4",
   "license": "MIT",
   "description": "CLI for running sandboxed Python code using Pyodide",
