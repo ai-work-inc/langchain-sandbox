@@ -1,6 +1,6 @@
 {
   "name": "@ai-work-inc/pyodide-sandbox",
-  "version": "0.0.4",
+  "version": "0.0.4-a",
   "license": "MIT",
   "description": "CLI for running sandboxed Python code using Pyodide",
   "exports": "./main.ts",
